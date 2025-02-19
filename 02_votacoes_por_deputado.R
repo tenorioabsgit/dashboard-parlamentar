@@ -35,9 +35,9 @@ get_deputados <- function() {
   return(data.frame())
 }
 
-# Função para buscar todas as votações de um deputado
-get_votacoes_por_deputado <- function(deputado_id, anos = ANOS_ANALISE) {
-  message("Buscando votações do deputado ", deputado_id, "...")
+# Função para buscar todas as votações do ano
+get_votacoes <- function(anos = ANOS_ANALISE) {
+  message("Buscando todas as votações...")
   votacoes <- list()
   
   fetch_votacoes <- function(ano, pagina = 1) {
@@ -54,8 +54,7 @@ get_votacoes_por_deputado <- function(deputado_id, anos = ANOS_ANALISE) {
     if (!is.null(response) && status_code(response) == 200) {
       dados <- fromJSON(content(response, "text", encoding = "UTF-8"))$dados
       if (length(dados) > 0) {
-        dados <- as.data.frame(dados)
-        return(dados)
+        return(as.data.frame(dados))
       }
     }
     return(NULL)
@@ -72,37 +71,77 @@ get_votacoes_por_deputado <- function(deputado_id, anos = ANOS_ANALISE) {
   }
   
   votacoes <- bind_rows(votacoes)
+  message("Total de votações obtidas: ", nrow(votacoes))
   return(votacoes)
+}
+
+# Função para buscar os votos de um deputado em votações específicas
+get_votos_por_deputado <- function(deputado_id, votacoes) {
+  message("Buscando votos do deputado ", deputado_id, "...")
+  votos <- list()
+  
+  fetch_votos <- function(votacao_id) {
+    url <- paste0(BASE_URL, "/votacoes/", votacao_id, "/votos")
+    
+    response <- tryCatch(
+      GET(url),
+      error = function(e) {
+        message("Erro ao buscar votos do deputado ", deputado_id, " na votação ", votacao_id, ": ", e)
+        return(NULL)
+      }
+    )
+    
+    if (!is.null(response) && status_code(response) == 200) {
+      dados <- fromJSON(content(response, "text", encoding = "UTF-8"))$dados
+      if (length(dados) > 0) {
+        dados <- as.data.frame(dados)
+        dados$deputado_id <- deputado_id
+        return(dados)
+      }
+    }
+    return(NULL)
+  }
+  
+  for (votacao_id in votacoes$id) {
+    votos <- append(votos, list(fetch_votos(votacao_id)))
+  }
+  
+  votos <- bind_rows(votos)
+  return(votos)
 }
 
 # Obtendo a lista de deputados
 deputados <- get_deputados()
 
 if (nrow(deputados) > 0) {
-  message("Iniciando coleta de votações para todos os deputados...")
+  # Obtendo todas as votações
+  votacoes_df <- get_votacoes()
+  
+  message("Iniciando coleta de votos para todos os deputados...")
   
   handlers(global = TRUE)
   with_progress({
     pb <- progressor(along = deputados$id)
     
-    votacoes_list <- future_map(deputados$id, function(deputado_id) {
+    votos_list <- future_map(deputados$id, function(deputado_id) {
       pb()
-      return(get_votacoes_por_deputado(deputado_id))
+      return(get_votos_por_deputado(deputado_id, votacoes_df))
     }, .progress = TRUE)
   })
   
-  votacoes_df <- bind_rows(votacoes_list)
+  votos_df <- bind_rows(votos_list)
   
   # Salvando os dados no Excel
   write_xlsx(
     list(
       "Deputados" = deputados,
-      "Votacoes" = votacoes_df
+      "Votacoes" = votacoes_df,
+      "Votos" = votos_df
     ),
-    path = "deputados_votacoes.xlsx"
+    path = "deputados_votos.xlsx"
   )
   
-  message("Arquivo 'deputados_votacoes.xlsx' salvo com sucesso!")
+  message("Arquivo 'deputados_votos.xlsx' salvo com sucesso!")
 } else {
   message("Erro ao obter a lista de deputados.")
 }
